@@ -1,0 +1,353 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+
+enum TableStatus { idle, loading, ready, error }
+
+enum ItemType {
+  beer,
+  coffee,
+  nation,
+  none;
+
+  String get asString => '$name';
+
+  List<String> get columns => this == coffee
+      ? ["Nome", "Origem", "Tipo"]
+      : this == beer
+          ? ["Nome", "Estilo", "IBU"]
+          : this == nation
+              ? ["Nome", "Capital", "Idioma", "Esporte"]
+              : [];
+
+  List<String> get properties => this == coffee
+      ? ["blend_name", "origin", "variety"]
+      : this == beer
+          ? ["name", "style", "ibu"]
+          : this == nation
+              ? ["nationality", "capital", "language", "national_sport"]
+              : [];
+}
+
+
+class DataService {
+  static const int MAX_N_ITEMS = 15;
+  static const int MIN_N_ITEMS = 3;
+  static const int DEFAULT_N_ITEMS = 7;
+  static const List<int> itemCounts = [3, 7, 15];
+
+  int _numberOfItems = DEFAULT_N_ITEMS;
+
+  set numberOfItems(int n) {
+    _numberOfItems = n <= 0 ? MIN_N_ITEMS : n > MAX_N_ITEMS ? MAX_N_ITEMS : n;
+  }
+
+  int get numberOfItems => _numberOfItems;
+
+  final ValueNotifier<Map<String, dynamic>> tableStateNotifier = ValueNotifier({
+    'status': TableStatus.idle,
+    'dataObjects': [],
+    'itemType': ItemType.none,
+    'sortColumnIndex': 0,
+    'sortAscending': true,
+  });
+
+  void carregar(int index) {
+    final params = [ItemType.coffee, ItemType.beer, ItemType.nation];
+    carregarPorTipo(params[index]);
+  }
+
+  void ordenarEstadoAtual(String propriedade, int columnIndex, bool crescente) {
+    List<dynamic> objetos = tableStateNotifier.value['dataObjects'] ?? [];
+    if (objetos.isEmpty) return;
+    List<dynamic> objetosOrdenados = objetos;
+    if (crescente) {
+      objetosOrdenados.sort((a, b) => a[propriedade].compareTo(b[propriedade]));
+    } else {
+      objetosOrdenados.sort((a, b) => b[propriedade].compareTo(a[propriedade]));
+    }
+    emitirEstadoOrdenado(objetosOrdenados, columnIndex, propriedade, crescente);
+  }
+
+  void filtrarEstadoAtual(String query) {
+    if (query.length < 3) {
+      return;
+    }
+
+    List<dynamic> objetos = tableStateNotifier.value['dataObjects'] ?? [];
+    if (objetos.isEmpty) return;
+
+    List<dynamic> objetosFiltrados = objetos.where((item) {
+      return item['name'].toLowerCase().contains(query.toLowerCase());
+    }).toList();
+    emitirEstadoFiltrado(objetosFiltrados);
+  }
+
+  void emitirEstadoFiltrado(List<dynamic> objetosFiltrados) {
+    var estado = tableStateNotifier.value;
+    estado['dataObjects'] = objetosFiltrados;
+    tableStateNotifier.value = { ...estado };
+  }
+
+  Future<void> carregarPorTipo(ItemType type) async {
+    if (tableStateNotifier.value['status'] == TableStatus.loading) return;
+
+    tableStateNotifier.value = {
+      'status': TableStatus.loading,
+      'dataObjects': [],
+      'itemType': type,
+    };
+
+    List<dynamic> json = [];
+    try {
+      if (type == ItemType.coffee) {
+        json = await acessarApiCafe();
+      } else if (type == ItemType.beer) {
+        json = await acessarApiCerveja();
+      } else if (type == ItemType.nation) {
+        json = await acessarApiNacoes();
+      }
+      tableStateNotifier.value = {
+        'status': TableStatus.ready,
+        'dataObjects': json,
+        'itemType': type,
+      };
+    } catch (e) {
+      tableStateNotifier.value = {
+        'status': TableStatus.error,
+        'dataObjects': [],
+        'itemType': type,
+      };
+    }
+  }
+
+  Future<List<dynamic>> acessarApiCafe() async {
+    var uri = Uri(
+      scheme: 'https',
+      host: 'random-data-api.com',
+      path: 'api/coffee/random_coffee',
+      queryParameters: {'size': '$_numberOfItems'},
+    );
+    var jsonString = await http.read(uri);
+    var json = jsonDecode(jsonString);
+    return json;
+  }
+
+  Future<List<dynamic>> acessarApiCerveja() async {
+    var uri = Uri(
+      scheme: 'https',
+      host: 'random-data-api.com',
+      path: 'api/beer/random_beer',
+      queryParameters: {'size': '$_numberOfItems'},
+    );
+    var jsonString = await http.read(uri);
+    var json = jsonDecode(jsonString);
+    return json;
+  }
+
+  Future<List<dynamic>> acessarApiNacoes() async {
+    var uri = Uri(
+      scheme: 'https',
+      host: 'random-data-api.com',
+      path: 'api/nation/random_nation',
+      queryParameters: {'size': '$_numberOfItems'},
+    );
+    var jsonString = await http.read(uri);
+    var json = jsonDecode(jsonString);
+    return json;
+  }
+
+  void emitirEstadoOrdenado(
+      List<dynamic> objetosOrdenados, int columnIndex, String propriedade, bool crescente) {
+    var estado = tableStateNotifier.value;
+    estado['dataObjects'] = objetosOrdenados;
+    estado['sortCriteria'] = propriedade;
+    estado['sortColumnIndex'] = columnIndex;
+    estado['sortAscending'] = crescente;
+    tableStateNotifier.value = { ...estado };
+  }
+}
+
+final DataService dataService = DataService();
+
+
+void main() {
+  MyApp app = MyApp();
+  runApp(app);
+}
+
+class MyApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      theme: ThemeData(primarySwatch: Colors.deepPurple),
+      debugShowCheckedModeBanner: false,
+      home: Scaffold(
+        appBar: AppBar(
+          title: const Text("Dicas"),
+          actions: [
+            ValueListenableBuilder(
+              valueListenable: dataService.tableStateNotifier,
+              builder: (_, value, __) {
+                return PopupMenuButton<int>(
+                  itemBuilder: (_) => DataService.itemCounts
+                      .map(
+                        (int num) => CheckedPopupMenuItem<int>(
+                          value: num,
+                          checked: num == dataService.numberOfItems,
+                          child: Text("Carregar $num itens por vez"),
+                        ),
+                      )
+                      .toList(),
+                  onSelected: (int number) {
+                    dataService.numberOfItems = number;
+                  },
+                );
+              },
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Center(
+                child: Container(
+                  width: 200,
+                  child: TextField(
+                    onChanged: (value) {
+                      dataService.filtrarEstadoAtual(value);
+                    },
+                    decoration: InputDecoration(
+                      hintText: "Pesquisar...",
+                      border: InputBorder.none,
+                      fillColor: Colors.white,
+                      filled: true,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        body: ValueListenableBuilder(
+          valueListenable: dataService.tableStateNotifier,
+          builder: (_, value, __) {
+            switch (value['status']) {
+              case TableStatus.idle:
+                return const Center(child: Text("Toque em algum botão"));
+              case TableStatus.loading:
+                return const Center(child: CircularProgressIndicator());
+              case TableStatus.ready:
+                return SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.vertical,
+                    child: DataTableWidget(
+                      jsonObjects: value['dataObjects'],
+                      columnNames: value['columnNames'],
+                      propertyNames: value['propertyNames'],
+                    ),
+                  ),
+                );
+              case TableStatus.error:
+                return const Center(child: Text("Lascou"));
+              default:
+                return const Center(child: Text("..."));
+            }
+          },
+        ),
+        bottomNavigationBar: NewNavBar(itemSelectedCallback: dataService.carregar),
+      ),
+    );
+  }
+}
+
+
+class NewNavBar extends HookWidget {
+  final void Function(int) _itemSelectedCallback;
+
+  NewNavBar({required void Function(int) itemSelectedCallback})
+      : _itemSelectedCallback = itemSelectedCallback;
+
+  @override
+  Widget build(BuildContext context) {
+    var state = useState(0);
+
+    return BottomNavigationBar(
+      onTap: (int index) {
+        state.value = index;
+        _itemSelectedCallback(index);
+      },
+      currentIndex: state.value,
+      items: const [
+        BottomNavigationBarItem(
+          label: "Cafés",
+          icon: Icon(Icons.coffee_outlined),
+        ),
+        BottomNavigationBarItem(
+          label: "Cervejas",
+          icon: Icon(Icons.local_drink_outlined),
+        ),
+        BottomNavigationBarItem(
+          label: "Nações",
+          icon: Icon(Icons.flag_outlined),
+        ),
+      ],
+    );
+  }
+}
+
+
+class DataTableWidget extends StatelessWidget {
+  final List<dynamic> jsonObjects;
+  final List<String> columnNames;
+  final List<String> propertyNames;
+
+  DataTableWidget({
+    this.jsonObjects = const [],
+    this.columnNames = const [],
+    this.propertyNames = const [],
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder(
+      valueListenable: dataService.tableStateNotifier,
+      builder: (context, value, child) {
+        return DataTable(
+          sortColumnIndex: value['sortColumnIndex'],
+          sortAscending: value['sortAscending'],
+          columns: columnNames
+              .map(
+                (String name) => DataColumn(
+                  onSort: (int columnIndex, bool ascending) {
+                    dataService.ordenarEstadoAtual(propertyNames[columnIndex], columnIndex, ascending);
+                    dataService.tableStateNotifier.value = {
+                      ...dataService.tableStateNotifier.value,
+                      'sortColumnIndex': columnIndex,
+                      'sortAscending': ascending,
+                    };
+                  },
+                  label: Expanded(
+                    child: Text(
+                      name,
+                      style: const TextStyle(fontStyle: FontStyle.italic),
+                    ),
+                  ),
+                ),
+              )
+              .toList(),
+          rows: jsonObjects
+              .map(
+                (dynamic obj) => DataRow(
+                  cells: propertyNames
+                      .map(
+                        (String propName) => DataCell(Text(obj[propName])),
+                      )
+                      .toList(),
+                ),
+              )
+              .toList(),
+        );
+      },
+    );
+  }
+}
